@@ -26,6 +26,7 @@ import (
 const (
 	acGet  = "GET"
 	acPost = "POST"
+	acPut  = "PUT"
 
 	/* 错误信息 */
 	acErrNoData   = `No data in body `
@@ -47,9 +48,10 @@ const (
 	acStatusBandwidthUsage = `status/bandwidth-usage` // 带宽利用率(百分比)
 
 	/* 用户接口(BBC中心端也支持) */
-	acUser           = `user`            // 用户(POST=添加,GET=按名称查找详细信息,verify=验证账号密码)
-	acUserNetPolicy  = `user/netpolicy`  // 用户上网策略的增删改查
-	acUserFluxPolicy = `user/fluxpolicy` // 用户流控策略的增删改查
+	acUser           = `user`             // 用户(POST=添加,GET=按名称查找详细信息,verify=验证账号密码)
+	acUserMod        = `user?method=PUT` // 用户(修改)
+	acUserNetPolicy  = `user/netpolicy`   // 用户上网策略的增删改查
+	acUserFluxPolicy = `user/fluxpolicy`  // 用户流控策略的增删改查
 
 	/* 组接口(BBC中心端也支持) */
 	acGroup          = `group`           // 添加组
@@ -505,7 +507,7 @@ func (ac *AC) UserAdd(data UserAdd) (string, error) {
 }
 
 // UserDel 删除用户
-// TODO: 尚未单元测试
+// TODO: 尚未单元测试 测试ok
 func (ac *AC) UserDel(username string) (string, error) {
 	var (
 		req = &acReq{
@@ -530,22 +532,23 @@ func (ac *AC) UserDel(username string) (string, error) {
 	return resp.Data.(string), nil
 }
 
-// TODO: 用户修改接口尚未实现,因为根据API接口文档描述无法得出具体行为,需要进一步测试
+// TODO: 用户修改接口尚未实现,因为根据API接口文档描述无法得出具体行为,需要进一步测试 UserMod test ok
 
 // UserDetail 用户详细信息(搜索或查找返回结构体)
 type UserDetail struct {
-	Name       string            `json:"name"`                 // 用户名
-	ShowName   string            `json:"show_name"`            // 显示名
-	Desc       string            `json:"desc"`                 // 用户描述
-	FatherPath string            `json:"father_path"`          // 用户所在组
-	Create     string            `json:"create"`               // 创建者
-	CreateFlag bool              `json:"create_flag"`          // 用户是否由认证或者自动同步添加的
-	Enable     bool              `json:"enable"`               // 是否启用
-	Logout     bool              `json:"logout"`               // 密码认证成功后是否弹出注销窗口
-	BindCfg    []string          `json:"bind_cfg,omitempty"`   // 用户IP,MAC绑定信息
-	CustomCfg  map[string]string `json:"custom_cfg,omitempty"` // 用户自定义属性键值对
-	Policy     []NetPolicyInfo   `json:"policy,omitempty"`     // 用户关联的策略(具体到单条策略)
-	SelfPass   struct {
+	Name       string `json:"name"`        // 用户名
+	ShowName   string `json:"show_name"`   // 显示名
+	Desc       string `json:"desc"`        // 用户描述
+	FatherPath string `json:"father_path"` // 用户所在组
+	Create     string `json:"create"`      // 创建者
+	CreateFlag bool   `json:"create_flag"` // 用户是否由认证或者自动同步添加的
+	Enable     bool   `json:"enable"`      // 是否启用
+	Logout     bool   `json:"logout"`      // 密码认证成功后是否弹出注销窗口
+	//BindCfg    []string          `json:"bind_cfg,omitempty"`   // 用户IP,MAC绑定信息
+	BindCfg   []map[string]string `json:"bind_cfg,omitempty"`   // 用户IP,MAC绑定信息
+	CustomCfg map[string]string   `json:"custom_cfg,omitempty"` // 用户自定义属性键值对
+	Policy    []NetPolicyInfo     `json:"policy,omitempty"`     // 用户关联的策略(具体到单条策略)
+	SelfPass  struct {
 		Enable     bool `json:"enable"`      // 用户是否启用密码
 		ModifyOnce bool `json:"modify_once"` // 初次认证是否修改秘密
 	} `json:"self_pass,omitempty"`
@@ -622,6 +625,67 @@ func (ac *AC) UserSearch(data UserSearch) ([]UserDetail, error) {
 	return r, nil
 }
 
+// UserSearch 用户搜索传入结构体(最多返回100个)
+type UserMod struct {
+	Name string `json:"name"` // need mod username
+	Data struct {
+		Desc       string `json:"desc,omitempty"`
+		ExpireTime string `json:"expire_time,omitempty"`
+		Extend     struct {
+			FatherPath string            `json:"father_path,omitempty"` // 指定搜索father_path组中的用户,默认为"/"
+			CustomCfg  map[string]string `json:"custom_cfg,omitempty"`  // 自定义属性的键值对(不支持同时搜索多个自定义属性)
+			UserStatus string            `json:"user_status,omitempty"` // 用户状态(共有3种,all:启用和禁用 enabled:启用 disabled:禁用,默认为"all")
+			Public     bool              `json:"public,omitempty"`      // true:搜索过滤出允许多人同时使用的帐号,默认为false
+			Expire     struct {
+				Start string `json:"start,omitempty"`
+				End   string `json:"end,omitempty"`
+			} `json:"expire,omitempty"` // 账号过期时间(start:起始时间 end:结束时间 start和end成 对出现,组成时间段)
+		} `json:"extend,omitempty"` // 搜索扩展字段
+	} `json:"data,omitempty"` // need mod userinfo
+}
+
+//UserMod 修改用户信息 test ok
+func (ac *AC) UserMod(modInfo UserMod) (string, error) {
+	req := &acReq{
+		uri:    ac.baseUrl + acUser,
+		method: acPost,
+		Query:  map[string]string{"_method": "PUT"},
+	}
+
+	var (
+		postData = make(map[string]interface{})
+		r        string
+	)
+
+	jb, err := json.Marshal(modInfo)
+	if err != nil {
+		return "", err
+	}
+	err = json.Unmarshal(jb, &postData)
+	if err != nil {
+		return "", err
+	}
+	req.Data = postData
+	dataBytes, err := ac.send(req)
+	if err != nil {
+		return "", err
+	}
+	if len(dataBytes) == 0 {
+		return "", errors.New(acErrNoData)
+	}
+	dataBytes = acFixJson(dataBytes)
+
+	var resp = &acResp{Data: &r}
+	err = json.Unmarshal(dataBytes, resp)
+	if err != nil {
+		return "", err
+	}
+	if resp.Code != 0 {
+		return "", errors.New(resp.Message)
+	}
+	return r, nil
+}
+
 // UserGet 获取用户详细信息
 func (ac *AC) UserGet(name string) (*UserDetail, error) {
 	var req = &acReq{
@@ -687,6 +751,39 @@ func (ac *AC) UserNetPolicySet(set UserPolicySet) (string, error) {
 	}
 	return resp.Data.(string), nil
 }
+
+//// UserNetPolicySet 设置用户的上网策略,返回成功提示或错误
+//func (ac *AC) UserNetPolicyGetInfo(username string) (string, error) {
+//	var (
+//		req      = &acReq{uri: ac.baseUrl + acUserNetPolicy, method: acGet}
+//		postData = make(map[string]interface{})
+//	)
+//	jb, err := json.Marshal(UserPolicySet{Opr: "get",User: username})
+//	if err != nil {
+//		return "", err
+//	}
+//	err = json.Unmarshal(jb, &postData)
+//	if err != nil {
+//		return "", err
+//	}
+//	req.Data = postData
+//	dataBytes, err := ac.send(req)
+//	if err != nil {
+//		return "", err
+//	}
+//	if len(dataBytes) == 0 {
+//		return "", errors.New(acErrNoData)
+//	}
+//	var resp = &acResp{}
+//	err = json.Unmarshal(dataBytes, resp)
+//	if err != nil {
+//		return "", err
+//	}
+//	if resp.Code != 0 {
+//		return "", errors.New(resp.Message)
+//	}
+//	return resp.Data.(string), nil
+//}
 
 // UserNetPolicyGet 获取用户关联的策略列表
 // FIXME:单元测试报错(请求的接口数据格式不正确!),需联系厂家获取正确参数
@@ -800,6 +897,8 @@ func (ac *AC) UserVerifyPassword(username, password string) error {
 	}
 	return nil
 }
+
+
 
 // GroupAdd 添加组
 // path:要添加的组路径,最多支持15层级目录创建(以"/"开头,且不支持向域 用户组添加组)
@@ -1356,6 +1455,7 @@ type OnlineUserUp struct {
 }
 
 // OnlineUserUp 上线在线用户(单点登录)
+// FIXME:单元测试报错(请求的接口数据格式不正确!),需联系厂家获取正确参数
 func (ac *AC) OnlineUserUp(user OnlineUserUp) error {
 	var (
 		err error
@@ -1442,6 +1542,7 @@ func (ac *AC) send(req *acReq) ([]byte, error) {
 			return nil, err
 		}
 	}
+
 	httpReq, err := http.NewRequest(req.method, req.uri, bytes.NewBuffer(dataBytes))
 	if err != nil {
 		return nil, err
